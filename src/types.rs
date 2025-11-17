@@ -53,3 +53,13 @@ pub enum AppState {
     EditMode,      // 编辑模式
     SaveMode,      // 保存选择模式
 }
+
+/// 组创建模式枚举
+#[derive(Clone, Copy, PartialEq)]
+pub enum GroupCreationMode {
+    Local,         // 本地模式
+    Remote,         // 远程模式
+    InputHost,      // 输入主机地址
+    InputPort,      // 输入端口
+    InputSecretKey, // 输入密钥
+}

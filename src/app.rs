@@ -24,13 +24,18 @@ pub struct App {
     pub in_edit_mode: bool,
     pub in_save_mode: bool,
     pub edit_buffer: String,
-    pub api_client: ApiClient,
+    pub api_client: Option<ApiClient>,  // 改为可选，支持本地模式
     pub current_group_id: Option<String>,
     pub error_message: Option<String>,
+    pub in_group_creation: bool,
+    pub group_creation_mode: GroupCreationMode,
+    pub group_creation_host: String,
+    pub group_creation_port: String,
+    pub group_creation_secret_key: String,
 }
 
 impl App {
-    pub fn new(api_client: ApiClient) -> Result<Self> {
+    pub fn new(api_client: Option<ApiClient>) -> Result<Self> {
         let mut state = ListState::default();
         if false {  // 占位，避免警告
             state.select(Some(0));
@@ -57,36 +62,55 @@ impl App {
             api_client,
             current_group_id: None,
             error_message: None,
+            in_group_creation: false,
+            group_creation_mode: GroupCreationMode::Local,
+            group_creation_host: String::new(),
+            group_creation_port: String::new(),
+            group_creation_secret_key: String::new(),
         };
 
-        // 加载 groups
-        app.load_groups()?;
+        // 只有在有API客户端时才加载远程groups
+        if app.api_client.is_some() {
+            app.load_groups()?;
+        }
         
         Ok(app)
     }
 
-    /// 从 API 加载所有 groups
+    /// 加载所有 groups（本地或远程）
     pub fn load_groups(&mut self) -> Result<()> {
-        match self.api_client.list_groups() {
-            Ok(groups) => {
-                self.groups = groups;
-                self.error_message = None;
-                // 更新选中状态
-                if !self.groups.is_empty() {
-                    self.state.select(Some(0));
-                } else {
-                    self.state.select(None);
+        match &self.api_client {
+            Some(api_client) => {
+                // 远程模式：从API加载
+                match api_client.list_groups() {
+                    Ok(groups) => {
+                        self.groups = groups;
+                        self.error_message = None;
+                        // 更新选中状态
+                        if !self.groups.is_empty() {
+                            self.state.select(Some(0));
+                        } else {
+                            self.state.select(None);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("加载组失败: {}", e));
+                        Err(e)
+                    }
                 }
-                Ok(())
             }
-            Err(e) => {
-                self.error_message = Some(format!("加载组失败: {}", e));
-                Err(e)
+            None => {
+                // 本地模式：清空groups列表
+                self.groups.clear();
+                self.error_message = None;
+                self.state.select(None);
+                Ok(())
             }
         }
     }
 
-    /// 从 API 加载当前组的 items
+    /// 加载当前组的 items（本地或远程）
     pub fn load_items(&mut self) -> Result<()> {
         let group_id = match &self.current_group_id {
             Some(id) => id.clone(),
@@ -96,44 +120,56 @@ impl App {
             }
         };
 
-        match self.api_client.list_items(&group_id) {
-            Ok(items) => {
-                // 解密 items 并转换为 DetailItem
-                self.detail_items = items
-                    .into_iter()
-                    .map(|item| {
-                        let title = self.api_client
-                            .decrypt_item_field(&item.title)
-                            .unwrap_or_else(|_| "解密失败".to_string());
-                        let describe = self.api_client
-                            .decrypt_item_field(&item.describe)
-                            .unwrap_or_else(|_| "解密失败".to_string());
-                        let text = self.api_client
-                            .decrypt_item_field(&item.text)
-                            .unwrap_or_else(|_| "解密失败".to_string());
+        match &self.api_client {
+            Some(api_client) => {
+                // 远程模式：从API加载
+                match api_client.list_items(&group_id) {
+                    Ok(items) => {
+                        // 解密 items 并转换为 DetailItem
+                        self.detail_items = items
+                            .into_iter()
+                            .map(|item| {
+                                let title = api_client
+                                    .decrypt_item_field(&item.title)
+                                    .unwrap_or_else(|_| "解密失败".to_string());
+                                let describe = api_client
+                                    .decrypt_item_field(&item.describe)
+                                    .unwrap_or_else(|_| "解密失败".to_string());
+                                let text = api_client
+                                    .decrypt_item_field(&item.text)
+                                    .unwrap_or_else(|_| "解密失败".to_string());
 
-                        DetailItem {
-                            title,
-                            describe,
-                            text,
-                            id: item.id,
-                            group_id: group_id.clone(),
+                                DetailItem {
+                                    title,
+                                    describe,
+                                    text,
+                                    id: item.id,
+                                    group_id: group_id.clone(),
+                                }
+                            })
+                            .collect();
+
+                        self.error_message = None;
+                        // 更新选中状态
+                        if !self.detail_items.is_empty() {
+                            self.detail_state.select(Some(0));
+                        } else {
+                            self.detail_state.select(None);
                         }
-                    })
-                    .collect();
-
-                self.error_message = None;
-                // 更新选中状态
-                if !self.detail_items.is_empty() {
-                    self.detail_state.select(Some(0));
-                } else {
-                    self.detail_state.select(None);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("加载 items 失败: {}", e));
+                        Err(e)
+                    }
                 }
-                Ok(())
             }
-            Err(e) => {
-                self.error_message = Some(format!("加载 items 失败: {}", e));
-                Err(e)
+            None => {
+                // 本地模式：清空items列表
+                self.detail_items.clear();
+                self.error_message = None;
+                self.detail_state.select(None);
+                Ok(())
             }
         }
     }
@@ -229,16 +265,34 @@ impl App {
         if let Some(selected) = self.state.selected() {
             if selected < self.groups.len() {
                 let group = &self.groups[selected];
-                return self.api_client
-                    .decrypt_group_name(&group.name)
-                    .unwrap_or_else(|_| "解密失败".to_string());
+                return match &self.api_client {
+                    Some(api_client) => {
+                        api_client
+                            .decrypt_group_name(&group.name)
+                            .unwrap_or_else(|_| "解密失败".to_string())
+                    }
+                    None => {
+                        // 本地模式：直接显示组名称
+                        group.name.clone()
+                    }
+                };
             }
         }
         "".to_string()
     }
 
-    /// 创建新组
+    /// 开始创建新组流程
     fn create_group(&mut self) {
+        self.in_group_creation = true;
+        self.group_creation_mode = GroupCreationMode::Local;
+        self.group_creation_host.clear();
+        self.group_creation_port.clear();
+        self.group_creation_secret_key.clear();
+        self.error_message = None;
+    }
+    
+    /// 完成组创建
+    fn finish_group_creation(&mut self) {
         // 简单实现：使用时间戳作为 ID
         use std::time::{SystemTime, UNIX_EPOCH};
         let id = format!("group_{}", 
@@ -248,15 +302,63 @@ impl App {
                 .as_secs());
         
         let name = "新订阅组";
-        match self.api_client.create_group(&id, name) {
-            Ok(_) => {
-                let _ = self.load_groups();
+        // 默认不使用加密，后续可以添加用户选择界面
+        let use_encryption = false;
+        
+        match self.group_creation_mode {
+            GroupCreationMode::Local => {
+                // 本地模式：直接在本地创建组
+                let new_group = Group {
+                    id: id.clone(),
+                    name: name.to_string(),
+                };
+                self.groups.push(new_group);
+                
+                // 更新选中状态
+                if !self.groups.is_empty() {
+                    self.state.select(Some(self.groups.len() - 1));
+                }
                 self.error_message = None;
             }
-            Err(e) => {
-                self.error_message = Some(format!("创建组失败: {}", e));
+            GroupCreationMode::Remote => {
+                // 远程模式：通过API创建组
+                if let Some(api_client) = &self.api_client {
+                    match api_client.create_group(&id, name, use_encryption) {
+                        Ok(_) => {
+                            let _ = self.load_groups();
+                            self.error_message = None;
+                        }
+                        Err(e) => {
+                            self.error_message = Some(format!("创建组失败: {}", e));
+                        }
+                    }
+                } else {
+                    // 如果没有API客户端，创建本地组
+                    let new_group = Group {
+                        id: id.clone(),
+                        name: name.to_string(),
+                    };
+                    self.groups.push(new_group);
+                    
+                    // 更新选中状态
+                    if !self.groups.is_empty() {
+                        self.state.select(Some(self.groups.len() - 1));
+                    }
+                    self.error_message = None;
+                }
+            }
+            _ => {
+                // 其他模式不应该到达这里
+                self.error_message = Some("组创建模式错误".to_string());
             }
         }
+        
+        // 重置组创建状态
+        self.in_group_creation = false;
+        self.group_creation_mode = GroupCreationMode::Local;
+        self.group_creation_host.clear();
+        self.group_creation_port.clear();
+        self.group_creation_secret_key.clear();
     }
 
     /// 删除当前组
@@ -264,19 +366,44 @@ impl App {
         if let Some(selected) = self.state.selected() {
             if selected < self.groups.len() {
                 let group_id = self.groups[selected].id.clone();
-                match self.api_client.delete_group(&group_id) {
-                    Ok(_) => {
-                        let _ = self.load_groups();
-                        self.error_message = None;
+                
+                match &self.api_client {
+                    Some(api_client) => {
+                        // 远程模式：通过API删除组
+                        match api_client.delete_group(&group_id) {
+                            Ok(_) => {
+                                let _ = self.load_groups();
+                                self.error_message = None;
+                                // 如果删除的是当前查看的组，返回主视图
+                                if self.current_group_id.as_ref() == Some(&group_id) {
+                                    self.in_detail_view = false;
+                                    self.in_detail_page = false;
+                                    self.current_group_id = None;
+                                }
+                            }
+                            Err(e) => {
+                                self.error_message = Some(format!("删除组失败: {}", e));
+                            }
+                        }
+                    }
+                    None => {
+                        // 本地模式：直接在本地删除组
+                        self.groups.remove(selected);
+                        
+                        // 更新选中状态
+                        if self.groups.is_empty() {
+                            self.state.select(None);
+                        } else if selected >= self.groups.len() {
+                            self.state.select(Some(self.groups.len() - 1));
+                        }
+                        
                         // 如果删除的是当前查看的组，返回主视图
                         if self.current_group_id.as_ref() == Some(&group_id) {
                             self.in_detail_view = false;
                             self.in_detail_page = false;
                             self.current_group_id = None;
                         }
-                    }
-                    Err(e) => {
-                        self.error_message = Some(format!("删除组失败: {}", e));
+                        self.error_message = None;
                     }
                 }
             }
@@ -300,13 +427,39 @@ impl App {
                 .unwrap()
                 .as_secs());
         
-        match self.api_client.create_item(&group_id, &id, "新标题", "新描述", "新文本") {
-            Ok(_) => {
-                let _ = self.load_items();
-                self.error_message = None;
+        // 默认不使用加密，后续可以添加用户选择界面
+        let use_encryption = false;
+        
+        match &self.api_client {
+            Some(api_client) => {
+                // 远程模式：通过API创建item
+                match api_client.create_item(&group_id, &id, "新标题", "新描述", "新文本", use_encryption) {
+                    Ok(_) => {
+                        let _ = self.load_items();
+                        self.error_message = None;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("创建 item 失败: {}", e));
+                    }
+                }
             }
-            Err(e) => {
-                self.error_message = Some(format!("创建 item 失败: {}", e));
+            None => {
+                // 本地模式：直接在本地创建item
+                let new_item = DetailItem {
+                    id: id.clone(),
+                    group_id: group_id.clone(),
+                    title: "新标题".to_string(),
+                    describe: "新描述".to_string(),
+                    text: "新文本".to_string(),
+                };
+                
+                self.detail_items.push(new_item);
+                
+                // 更新选中状态
+                if !self.detail_items.is_empty() {
+                    self.detail_state.select(Some(self.detail_items.len() - 1));
+                }
+                self.error_message = None;
             }
         }
     }
@@ -319,13 +472,30 @@ impl App {
                 let group_id = item.group_id.clone();
                 let item_id = item.id.clone();
                 
-                match self.api_client.delete_item(&group_id, &item_id) {
-                    Ok(_) => {
-                        let _ = self.load_items();
-                        self.error_message = None;
+                match &self.api_client {
+                    Some(api_client) => {
+                        // 远程模式：通过API删除item
+                        match api_client.delete_item(&group_id, &item_id) {
+                            Ok(_) => {
+                                let _ = self.load_items();
+                                self.error_message = None;
+                            }
+                            Err(e) => {
+                                self.error_message = Some(format!("删除 item 失败: {}", e));
+                            }
+                        }
                     }
-                    Err(e) => {
-                        self.error_message = Some(format!("删除 item 失败: {}", e));
+                    None => {
+                        // 本地模式：直接在本地删除item
+                        self.detail_items.remove(selected);
+                        
+                        // 更新选中状态
+                        if self.detail_items.is_empty() {
+                            self.detail_state.select(None);
+                        } else if selected >= self.detail_items.len() {
+                            self.detail_state.select(Some(self.detail_items.len() - 1));
+                        }
+                        self.error_message = None;
                     }
                 }
             }
@@ -355,16 +525,31 @@ impl App {
             }
         };
 
-        match self.api_client.update_item(&group_id, &item_id, &title, &describe, &text) {
-            Ok(_) => {
-                // 更新本地数据
+        // 默认不使用加密，后续可以添加用户选择界面
+        let use_encryption = false;
+        
+        match &self.api_client {
+            Some(api_client) => {
+                // 远程模式：通过API更新item
+                match api_client.update_item(&group_id, &item_id, &title, &describe, &text, use_encryption) {
+                    Ok(_) => {
+                        // 更新本地数据
+                        self.detail_items[self.current_detail_index].title = title;
+                        self.detail_items[self.current_detail_index].describe = describe;
+                        self.detail_items[self.current_detail_index].text = text;
+                        self.error_message = None;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("更新 item 失败: {}", e));
+                    }
+                }
+            }
+            None => {
+                // 本地模式：直接在本地更新item
                 self.detail_items[self.current_detail_index].title = title;
                 self.detail_items[self.current_detail_index].describe = describe;
                 self.detail_items[self.current_detail_index].text = text;
                 self.error_message = None;
-            }
-            Err(e) => {
-                self.error_message = Some(format!("更新 item 失败: {}", e));
             }
         }
     }
@@ -438,6 +623,30 @@ impl App {
             KeyCode::Char('a') => {
                 if self.in_edit_mode {
                     self.edit_buffer.push('a');
+                } else if self.in_group_creation {
+                    // 在组创建流程中，处理模式选择
+                    match self.group_creation_mode {
+                        GroupCreationMode::Local => {
+                            // 选择本地模式，直接完成创建
+                            self.finish_group_creation();
+                        }
+                        GroupCreationMode::Remote => {
+                            // 选择远程模式，开始输入主机地址
+                            self.group_creation_mode = GroupCreationMode::InputHost;
+                        }
+                        GroupCreationMode::InputHost => {
+                            // 完成主机地址输入，开始输入端口
+                            self.group_creation_mode = GroupCreationMode::InputPort;
+                        }
+                        GroupCreationMode::InputPort => {
+                            // 完成端口输入，开始输入密钥
+                            self.group_creation_mode = GroupCreationMode::InputSecretKey;
+                        }
+                        GroupCreationMode::InputSecretKey => {
+                            // 完成所有输入，创建组
+                            self.finish_group_creation();
+                        }
+                    }
                 } else if self.in_detail_view {
                     self.create_item();
                 } else {
@@ -570,12 +779,53 @@ impl App {
                 }
             },
             KeyCode::Char(c) => {
-                if self.in_edit_mode {
+                if self.in_group_creation {
+                    // 在组创建流程中，处理文本输入
+                    match self.group_creation_mode {
+                        GroupCreationMode::InputHost => {
+                            self.group_creation_host.push(c);
+                        }
+                        GroupCreationMode::InputPort => {
+                            self.group_creation_port.push(c);
+                        }
+                        GroupCreationMode::InputSecretKey => {
+                            self.group_creation_secret_key.push(c);
+                        }
+                        _ => {
+                            // 在其他模式下，处理模式切换
+                            match c {
+                                'l' => {
+                                    // 切换到本地模式
+                                    self.group_creation_mode = GroupCreationMode::Local;
+                                }
+                                'r' => {
+                                    // 切换到远程模式
+                                    self.group_creation_mode = GroupCreationMode::Remote;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                } else if self.in_edit_mode {
                     self.edit_buffer.push(c);
                 }
             },
             KeyCode::Backspace => {
-                if self.in_edit_mode {
+                if self.in_group_creation {
+                    // 在组创建流程中，处理退格删除
+                    match self.group_creation_mode {
+                        GroupCreationMode::InputHost => {
+                            self.group_creation_host.pop();
+                        }
+                        GroupCreationMode::InputPort => {
+                            self.group_creation_port.pop();
+                        }
+                        GroupCreationMode::InputSecretKey => {
+                            self.group_creation_secret_key.pop();
+                        }
+                        _ => {}
+                    }
+                } else if self.in_edit_mode {
                     self.edit_buffer.pop();
                 }
             },
@@ -591,22 +841,29 @@ impl App {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') => {
-                            if self.in_save_mode {
-                                self.in_save_mode = false;
-                                self.in_edit_mode = false;
-                                self.edit_buffer.clear();
-                            } else if self.in_edit_mode {
-                                self.edit_buffer.push('q');
-                            } else if self.in_detail_page {
-                                self.in_detail_page = false;
-                            } else if self.in_detail_view {
-                                self.in_detail_view = false;
-                                self.in_detail_page = false;
-                                self.current_group_id = None;
-                            } else {
-                                return Ok(());
-                            }
-                        }
+                if self.in_group_creation {
+                    // 取消组创建流程
+                    self.in_group_creation = false;
+                    self.group_creation_mode = GroupCreationMode::Local;
+                    self.group_creation_host.clear();
+                    self.group_creation_port.clear();
+                    self.group_creation_secret_key.clear();
+                } else if self.in_save_mode {
+                    self.in_save_mode = false;
+                    self.in_edit_mode = false;
+                    self.edit_buffer.clear();
+                } else if self.in_edit_mode {
+                    self.edit_buffer.push('q');
+                } else if self.in_detail_page {
+                    self.in_detail_page = false;
+                } else if self.in_detail_view {
+                    self.in_detail_view = false;
+                    self.in_detail_page = false;
+                    self.current_group_id = None;
+                } else {
+                    return Ok(());
+                }
+            }
                         _ => {
                             self.handle_key_event(key.code);
                         }

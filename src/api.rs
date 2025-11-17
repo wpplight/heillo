@@ -9,7 +9,7 @@ use std::time::Duration;
 pub struct ApiClient {
     client: Client,
     base_url: String,
-    secret_key: [u8; 32],
+    secret_key: Option<[u8; 32]>,
 }
 
 impl ApiClient {
@@ -17,14 +17,14 @@ impl ApiClient {
     /// 
     /// # 参数
     /// - `base_url`: API 服务器基础 URL
-    /// - `secret_key`: 加密密钥字符串
-    pub fn new(base_url: String, secret_key: String) -> Result<Self> {
+    /// - `secret_key`: 可选的加密密钥字符串
+    pub fn new(base_url: String, secret_key: Option<String>) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .context("创建 HTTP 客户端失败")?;
 
-        let secret_key = derive_key(&secret_key);
+        let secret_key = secret_key.map(|key: String| derive_key(&key));
 
         Ok(Self {
             client,
@@ -55,14 +55,21 @@ impl ApiClient {
     }
 
     /// 创建组
-    pub fn create_group(&self, id: &str, name: &str) -> Result<Group> {
-        let encrypted_name = encrypt(&self.secret_key, name.as_bytes())
-            .context("加密组名称失败")?;
+    pub fn create_group(&self, id: &str, name: &str, use_encryption: bool) -> Result<Group> {
+        let name_value = if use_encryption {
+            if let Some(secret_key) = &self.secret_key {
+                encrypt(secret_key, name.as_bytes())?
+            } else {
+                anyhow::bail!("没有设置加密密钥")
+            }
+        } else {
+            name.to_string()
+        };
 
         let url = format!("{}/api/groups", self.base_url);
         let body = json!({
             "id": id,
-            "name": encrypted_name
+            "name": name_value
         });
 
         let response = self
@@ -106,14 +113,21 @@ impl ApiClient {
     }
 
     /// 更新组
-    pub fn update_group(&self, id: &str, name: &str) -> Result<()> {
-        let encrypted_name = encrypt(&self.secret_key, name.as_bytes())
-            .context("加密组名称失败")?;
+    pub fn update_group(&self, id: &str, name: &str, use_encryption: bool) -> Result<()> {
+        let name_value = if use_encryption {
+            if let Some(secret_key) = &self.secret_key {
+                encrypt(secret_key, name.as_bytes())?
+            } else {
+                anyhow::bail!("没有设置加密密钥")
+            }
+        } else {
+            name.to_string()
+        };
 
         let url = format!("{}/api/groups/{}", self.base_url, id);
         let body = json!({
             "id": id,
-            "name": encrypted_name
+            "name": name_value
         });
 
         let response = self
@@ -183,13 +197,23 @@ impl ApiClient {
         title: &str,
         describe: &str,
         text: &str,
+        use_encryption: bool
     ) -> Result<Item> {
-        let encrypted_title = encrypt(&self.secret_key, title.as_bytes())
-            .context("加密标题失败")?;
-        let encrypted_describe = encrypt(&self.secret_key, describe.as_bytes())
-            .context("加密描述失败")?;
-        let encrypted_text = encrypt(&self.secret_key, text.as_bytes())
-            .context("加密文本失败")?;
+        let encrypt_field = |field: &str| -> Result<String> {
+            if use_encryption {
+                if let Some(secret_key) = &self.secret_key {
+                    encrypt(secret_key, field.as_bytes())
+                } else {
+                    anyhow::bail!("没有设置加密密钥")
+                }
+            } else {
+                Ok(field.to_string())
+            }
+        };
+
+        let encrypted_title = encrypt_field(title)?;
+        let encrypted_describe = encrypt_field(describe)?;
+        let encrypted_text = encrypt_field(text)?;
 
         let url = format!("{}/api/groups/{}/items", self.base_url, group_id);
         let body = json!({
@@ -247,13 +271,23 @@ impl ApiClient {
         title: &str,
         describe: &str,
         text: &str,
+        use_encryption: bool
     ) -> Result<()> {
-        let encrypted_title = encrypt(&self.secret_key, title.as_bytes())
-            .context("加密标题失败")?;
-        let encrypted_describe = encrypt(&self.secret_key, describe.as_bytes())
-            .context("加密描述失败")?;
-        let encrypted_text = encrypt(&self.secret_key, text.as_bytes())
-            .context("加密文本失败")?;
+        let encrypt_field = |field: &str| -> Result<String> {
+            if use_encryption {
+                if let Some(secret_key) = &self.secret_key {
+                    encrypt(secret_key, field.as_bytes())
+                } else {
+                    anyhow::bail!("没有设置加密密钥")
+                }
+            } else {
+                Ok(field.to_string())
+            }
+        };
+
+        let encrypted_title = encrypt_field(title)?;
+        let encrypted_describe = encrypt_field(describe)?;
+        let encrypted_text = encrypt_field(text)?;
 
         let url = format!("{}/api/groups/{}/items/{}", self.base_url, group_id, item_id);
         let body = json!({
@@ -303,16 +337,26 @@ impl ApiClient {
 
     /// 解密组名称
     pub fn decrypt_group_name(&self, encrypted_name: &str) -> Result<String> {
-        let decrypted = decrypt(&self.secret_key, encrypted_name)
-            .context("解密组名称失败")?;
-        String::from_utf8(decrypted).context("转换为字符串失败")
+        if let Some(secret_key) = &self.secret_key {
+            let decrypted = decrypt(secret_key, encrypted_name)
+                .context("解密组名称失败")?;
+            String::from_utf8(decrypted).context("转换为字符串失败")
+        } else {
+            // 如果没有密钥，直接返回原始字符串
+            Ok(encrypted_name.to_string())
+        }
     }
 
     /// 解密 item 字段
     pub fn decrypt_item_field(&self, encrypted_field: &str) -> Result<String> {
-        let decrypted = decrypt(&self.secret_key, encrypted_field)
-            .context("解密字段失败")?;
-        String::from_utf8(decrypted).context("转换为字符串失败")
+        if let Some(secret_key) = &self.secret_key {
+            let decrypted = decrypt(secret_key, encrypted_field)
+                .context("解密字段失败")?;
+            String::from_utf8(decrypted).context("转换为字符串失败")
+        } else {
+            // 如果没有密钥，直接返回原始字符串
+            Ok(encrypted_field.to_string())
+        }
     }
 }
 

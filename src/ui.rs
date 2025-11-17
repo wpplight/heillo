@@ -111,6 +111,70 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             f.render_widget(describe_paragraph, detail_chunks[1]);
             f.render_widget(text_paragraph, detail_chunks[2]);
         }
+    } else if app.in_group_creation {
+        // 显示组创建流程界面
+        let creation_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(chunks[0]);
+
+        // 显示标题
+        let title_paragraph = Paragraph::new("创建新订阅组")
+            .block(Block::default().borders(Borders::ALL).title("创建组"))
+            .style(Style::default().fg(Color::Cyan));
+        f.render_widget(title_paragraph, creation_chunks[0]);
+
+        // 显示模式选择
+        let mode_text = match app.group_creation_mode {
+            GroupCreationMode::Local => "模式: 本地 (按 'r' 切换到远程)",
+            GroupCreationMode::Remote => "模式: 远程 (按 'l' 切换到本地)",
+            GroupCreationMode::InputHost => "模式: 远程 - 输入主机地址",
+            GroupCreationMode::InputPort => "模式: 远程 - 输入端口",
+            GroupCreationMode::InputSecretKey => "模式: 远程 - 输入密钥",
+        };
+        let mode_paragraph = Paragraph::new(mode_text)
+            .block(Block::default().borders(Borders::ALL).title("模式"))
+            .style(Style::default().fg(Color::Yellow));
+        f.render_widget(mode_paragraph, creation_chunks[1]);
+
+        // 显示输入字段
+        let host_text = format!("主机: {}", app.group_creation_host);
+        let host_paragraph = Paragraph::new(host_text)
+            .block(Block::default().borders(Borders::ALL).title("主机地址"))
+            .style(Style::default().fg(Color::White));
+        f.render_widget(host_paragraph, creation_chunks[2]);
+
+        let port_text = format!("端口: {}", app.group_creation_port);
+        let port_paragraph = Paragraph::new(port_text)
+            .block(Block::default().borders(Borders::ALL).title("端口"))
+            .style(Style::default().fg(Color::White));
+        f.render_widget(port_paragraph, creation_chunks[3]);
+
+        let key_text = format!("密钥: {}", app.group_creation_secret_key);
+        let key_paragraph = Paragraph::new(key_text)
+            .block(Block::default().borders(Borders::ALL).title("密钥"))
+            .style(Style::default().fg(Color::White));
+        f.render_widget(key_paragraph, creation_chunks[4]);
+
+        // 显示操作说明
+        let instruction_text = match app.group_creation_mode {
+            GroupCreationMode::Local => "按 'a' 确认创建本地组，按 'q' 取消",
+            GroupCreationMode::Remote => "按 'a' 开始输入远程连接信息，按 'q' 取消",
+            GroupCreationMode::InputHost => "输入主机地址，按 'a' 继续，按 'q' 取消",
+            GroupCreationMode::InputPort => "输入端口号，按 'a' 继续，按 'q' 取消",
+            GroupCreationMode::InputSecretKey => "输入密钥，按 'a' 完成创建，按 'q' 取消",
+        };
+        let instruction_paragraph = Paragraph::new(instruction_text)
+            .block(Block::default().borders(Borders::ALL).title("操作"))
+            .style(Style::default().fg(Color::Green));
+        f.render_widget(instruction_paragraph, creation_chunks[5]);
     } else if app.in_detail_view {
         // 显示详细内容列表
         let items: Vec<ListItem> = app
@@ -146,9 +210,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .groups
             .iter()
             .map(|group| {
-                let name = app.api_client
-                    .decrypt_group_name(&group.name)
-                    .unwrap_or_else(|_| "解密失败".to_string());
+                let name = match &app.api_client {
+                    Some(api_client) => {
+                        api_client
+                            .decrypt_group_name(&group.name)
+                            .unwrap_or_else(|_| "解密失败".to_string())
+                    }
+                    None => {
+                        // 本地模式：直接显示组名称
+                        group.name.clone()
+                    }
+                };
                 let line = Line::from(name);
                 ListItem::new(line).style(Style::default().fg(Color::White))
             })
