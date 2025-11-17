@@ -1,15 +1,14 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
 
-use crate::types::{DetailSelection, GroupCreationField};
 use crate::app::App;
+use crate::views::{
+    detail_page_view, error_view, group_creation_view, help_view, items_view, main_view,
+};
 
-// UI渲染函数
+/// UI 渲染函数（视图路由器）
 pub fn draw(f: &mut Frame, app: &mut App) {
     // 创建主布局
     let chunks = Layout::default()
@@ -17,352 +16,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
         .split(f.size());
 
-    // 如果在详情页面中
+    // 根据应用状态路由到对应的视图
     if app.in_detail_page && !app.detail_items.is_empty() {
-        // 显示详细内容
-        if app.current_detail_index < app.detail_items.len() {
-            let current_item = &app.detail_items[app.current_detail_index];
-            
-            // 创建垂直布局用于显示详细信息
-            let detail_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(50),
-                ])
-                .margin(1)
-                .split(chunks[0]);
-
-            // 创建标题区块
-            let title_block = Block::default()
-                .borders(Borders::ALL)
-                .title("标题");
-            let title_paragraph = Paragraph::new(
-                if (app.in_edit_mode || app.in_save_mode) && app.current_detail_selection == DetailSelection::Title {
-                    app.edit_buffer.clone()
-                } else {
-                    current_item.title.clone()
-                }
-            )
-            .block(title_block)
-            .style(
-                if app.current_detail_selection == DetailSelection::Title {
-                    if app.in_edit_mode {
-                        Style::default().fg(Color::White).bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::White).bg(Color::Blue)
-                    }
-                } else {
-                    Style::default().fg(Color::White)
-                }
-            );
-
-            // 创建描述区块
-            let describe_block = Block::default()
-                .borders(Borders::ALL)
-                .title("描述");
-            let describe_paragraph = Paragraph::new(
-                if (app.in_edit_mode || app.in_save_mode) && app.current_detail_selection == DetailSelection::Describe {
-                    app.edit_buffer.clone()
-                } else {
-                    current_item.describe.clone()
-                }
-            )
-            .block(describe_block)
-            .style(
-                if app.current_detail_selection == DetailSelection::Describe {
-                    if app.in_edit_mode {
-                        Style::default().fg(Color::White).bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::White).bg(Color::Blue)
-                    }
-                } else {
-                    Style::default().fg(Color::White)
-                }
-            );
-
-            // 创建文本区块
-            let text_block = Block::default()
-                .borders(Borders::ALL)
-                .title("文本");
-            let text_paragraph = Paragraph::new(
-                if (app.in_edit_mode || app.in_save_mode) && app.current_detail_selection == DetailSelection::Text {
-                    app.edit_buffer.clone()
-                } else {
-                    current_item.text.clone()
-                }
-            )
-            .block(text_block)
-            .style(
-                if app.current_detail_selection == DetailSelection::Text {
-                    if app.in_edit_mode {
-                        Style::default().fg(Color::White).bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::White).bg(Color::Blue)
-                    }
-                } else {
-                    Style::default().fg(Color::White)
-                }
-            );
-                
-            // 渲染三个区块
-            f.render_widget(title_paragraph, detail_chunks[0]);
-            f.render_widget(describe_paragraph, detail_chunks[1]);
-            f.render_widget(text_paragraph, detail_chunks[2]);
-        }
+        // 详情页面
+        detail_page_view::render(f, chunks[0], app);
     } else if app.in_group_creation {
-        // 显示组创建流程界面
-        let creation_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Min(0),
-            ])
-            .split(chunks[0]);
-
-        // 显示标题
-        let title_paragraph = Paragraph::new("创建新订阅组 (不输入 host 和 port 则创建本地组)")
-            .block(Block::default().borders(Borders::ALL).title("创建组"))
-            .style(Style::default().fg(Color::Cyan));
-        f.render_widget(title_paragraph, creation_chunks[0]);
-
-        // 显示输入字段（高亮当前选中的字段）
-        let host_text = format!("主机: {}", app.group_creation_host);
-        let host_style = if app.group_creation_field == GroupCreationField::Host {
-            Style::default().fg(Color::White).bg(Color::Blue)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let host_paragraph = Paragraph::new(host_text)
-            .block(Block::default().borders(Borders::ALL).title("主机地址"))
-            .style(host_style);
-        f.render_widget(host_paragraph, creation_chunks[1]);
-
-        let port_text = format!("端口: {}", app.group_creation_port);
-        let port_style = if app.group_creation_field == GroupCreationField::Port {
-            Style::default().fg(Color::White).bg(Color::Blue)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let port_paragraph = Paragraph::new(port_text)
-            .block(Block::default().borders(Borders::ALL).title("端口"))
-            .style(port_style);
-        f.render_widget(port_paragraph, creation_chunks[2]);
-
-        let key_text = format!("密钥: {}", app.group_creation_secret_key);
-        let key_style = if app.group_creation_field == GroupCreationField::SecretKey {
-            Style::default().fg(Color::White).bg(Color::Blue)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let key_paragraph = Paragraph::new(key_text)
-            .block(Block::default().borders(Borders::ALL).title("密钥"))
-            .style(key_style);
-        f.render_widget(key_paragraph, creation_chunks[3]);
-
-        // 显示操作说明
-        let instruction_text = "↑/↓/j/k: 切换输入字段 | Enter/'a': 创建组 | 'q': 取消";
-        let instruction_paragraph = Paragraph::new(instruction_text)
-            .block(Block::default().borders(Borders::ALL).title("操作"))
-            .style(Style::default().fg(Color::Green));
-        f.render_widget(instruction_paragraph, creation_chunks[4]);
+        // 组创建页面
+        group_creation_view::render(f, chunks[0], app);
     } else if app.in_detail_view {
-        // 显示详细内容列表
-        let items: Vec<ListItem> = app
-            .detail_items
-            .iter()
-            .map(|item| {
-                let line = Line::from(vec![
-                    Span::styled(&item.title, Style::default().fg(Color::Cyan)),
-                    Span::raw(" - "),
-                    Span::styled(&item.describe, Style::default().fg(Color::Yellow)),
-                ]);
-                ListItem::new(line).style(Style::default().fg(Color::White))
-            })
-            .collect();
-
-        // 创建列表组件
-        let items = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("items"))
-            .highlight_style(
-                Style::default()
-                    .bg(Color::LightBlue)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol(">> ");
-
-        // 渲染列表
-        f.render_stateful_widget(items, chunks[0], &mut app.detail_state);
+        // Items 列表视图
+        items_view::render(f, chunks[0], app);
     } else {
-        // 显示主订阅组列表
-        // 创建列表项（显示解密后的组名称）
-        let items: Vec<ListItem> = app
-            .groups
-            .iter()
-            .map(|group| {
-                let name = if group.is_local {
-                    // 本地组：直接显示组名称
-                    group.name.clone()
-                } else {
-                    // 远程组：使用该组的 API 客户端解密
-                    if let Some(api_client) = app.group_api_clients.get(&group.id) {
-                        api_client
-                            .decrypt_group_name(&group.name)
-                            .unwrap_or_else(|_| "解密失败".to_string())
-                    } else {
-                        // 如果没有找到 API 客户端，显示原始名称
-                        group.name.clone()
-                    }
-                };
-                let line = Line::from(name);
-                ListItem::new(line).style(Style::default().fg(Color::White))
-            })
-            .collect();
-
-        // 创建列表组件
-        let items = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("订阅组"))
-            .highlight_style(
-                Style::default()
-                    .bg(Color::LightBlue)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol(">> ");
-
-        // 渲染列表
-        f.render_stateful_widget(items, chunks[0], &mut app.state);
+        // 主视图（groups 列表）
+        main_view::render(f, chunks[0], app);
     }
 
-    // 显示错误消息（如果有）
-    if let Some(error) = &app.error_message {
-        let error_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(3)])
-            .split(chunks[1]);
-        
-        let error_paragraph = Paragraph::new(error.as_str())
-            .block(Block::default().borders(Borders::ALL).title("错误").border_style(Style::default().fg(Color::Red)))
-            .style(Style::default().fg(Color::Red));
-        
-        f.render_widget(error_paragraph, error_chunks[1]);
-        
-        // 调整帮助文本区域
-        let help_paragraph = Paragraph::new(get_help_text(app))
-            .block(Block::default().borders(Borders::ALL).title("操作说明"))
-            .style(Style::default().fg(Color::Gray));
-        
-        f.render_widget(help_paragraph, error_chunks[0]);
+    // 渲染底部区域（帮助文本和错误消息）
+    if app.error_message.is_some() {
+        // 如果有错误，分割区域显示错误和帮助
+        let (help_area, error_area) = error_view::get_error_area(chunks[1], app);
+        help_view::render(f, help_area, app);
+        error_view::render(f, error_area, app);
     } else {
-        // 创建说明栏组件
-        let help_paragraph = Paragraph::new(get_help_text(app))
-            .block(Block::default().borders(Borders::ALL).title("操作说明"))
-            .style(Style::default().fg(Color::Gray));
-
-        // 渲染说明栏
-        f.render_widget(help_paragraph, chunks[1]);
-    }
-
-}
-
-// 生成帮助文本
-fn get_help_text(app: &App) -> Vec<Line> {
-    if app.in_detail_page {
-        if app.in_save_mode {
-            vec![
-                Line::from(vec![
-                    Span::styled("选择保存方式:", Style::default().fg(Color::Green)),
-                    Span::raw("  "),
-                ]),
-                Line::from(vec![
-                    Span::styled("q", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 不保存退出  "),
-                    Span::styled("w", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 保存并退出"),
-                ]),
-                Line::from(vec![
-                    Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 返回编辑模式"),
-                ]),
-            ]
-        } else if app.in_edit_mode {
-            vec![
-                Line::from(vec![
-                    Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 完成编辑"),
-                ]),
-                Line::from(vec![
-                    Span::styled("字符输入", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 输入文本  "),
-                    Span::styled("Backspace", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 删除字符  "),
-                    Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 换行"),
-                ]),
-            ]
-        } else {
-            vec![
-                Line::from(vec![
-                    Span::styled("↑/↓/j/k", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 切换选择项  "),
-                    Span::styled("v", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 编辑选中项"),
-                ]),
-                Line::from(vec![
-                    Span::styled("d", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 清空选中项内容  "),
-                    Span::styled("q/Esc", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 返回items列表  "),
-                    Span::styled("b", Style::default().fg(Color::Yellow)),
-                    Span::raw(" - 模拟键盘输出(2秒后)"),
-                ]),
-            ]
-        }
-    } else if app.in_detail_view {
-        vec![
-            Line::from(vec![
-                Span::styled("q/Esc", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 返回主列表  "),
-                Span::styled("↑/↓/j/k", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 上下导航  "),
-                Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 查看项目详情  "),
-                Span::styled("a", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 添加项目  "),
-                Span::styled("d", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 删除项目"),
-            ]),
-        ]
-    } else {
-        vec![
-            Line::from(vec![
-                Span::styled("q/Esc", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 退出程序  "),
-                Span::styled("↑/↓/j/k", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 上下导航  "),
-                Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 选择组  "),
-                Span::styled("r", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 刷新列表  "),
-                Span::styled("t", Style::default().fg(Color::Yellow)),
-                Span::raw(" - "),
-                Span::styled(
-                    if app.is_pinned { "取消置顶" } else { "窗口置顶" },
-                    Style::default().fg(if app.is_pinned { Color::Red } else { Color::Green })
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("a", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 添加订阅组  "),
-                Span::styled("d", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 删除订阅组"),
-            ]),
-        ]
+        // 只显示帮助
+        help_view::render(f, chunks[1], app);
     }
 }

@@ -14,6 +14,7 @@ mod models;
 mod types;
 mod ui;
 mod utils;
+mod views;
 
 // 主函数
 fn main() -> Result<()> {
