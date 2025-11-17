@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::types::{DetailItem, DetailSelection};
+use crate::types::DetailSelection;
 use crate::app::App;
 
 // UI渲染函数
@@ -140,20 +140,23 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         // 渲染列表
         f.render_stateful_widget(items, chunks[0], &mut app.detail_state);
     } else {
-        // 显示主订阅列表
-        // 创建列表项
+        // 显示主订阅组列表
+        // 创建列表项（显示解密后的组名称）
         let items: Vec<ListItem> = app
-            .items
+            .groups
             .iter()
-            .map(|i| {
-                let line = Line::from(i.as_str());
+            .map(|group| {
+                let name = app.api_client
+                    .decrypt_group_name(&group.name)
+                    .unwrap_or_else(|_| "解密失败".to_string());
+                let line = Line::from(name);
                 ListItem::new(line).style(Style::default().fg(Color::White))
             })
             .collect();
 
         // 创建列表组件
         let items = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("订阅"))
+            .block(Block::default().borders(Borders::ALL).title("订阅组"))
             .highlight_style(
                 Style::default()
                     .bg(Color::LightBlue)
@@ -166,16 +169,35 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.render_stateful_widget(items, chunks[0], &mut app.state);
     }
 
-    // 创建说明栏文本
-    let help_text = get_help_text(app);
+    // 显示错误消息（如果有）
+    if let Some(error) = &app.error_message {
+        let error_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(3)])
+            .split(chunks[1]);
+        
+        let error_paragraph = Paragraph::new(error.as_str())
+            .block(Block::default().borders(Borders::ALL).title("错误").border_style(Style::default().fg(Color::Red)))
+            .style(Style::default().fg(Color::Red));
+        
+        f.render_widget(error_paragraph, error_chunks[1]);
+        
+        // 调整帮助文本区域
+        let help_paragraph = Paragraph::new(get_help_text(app))
+            .block(Block::default().borders(Borders::ALL).title("操作说明"))
+            .style(Style::default().fg(Color::Gray));
+        
+        f.render_widget(help_paragraph, error_chunks[0]);
+    } else {
+        // 创建说明栏组件
+        let help_paragraph = Paragraph::new(get_help_text(app))
+            .block(Block::default().borders(Borders::ALL).title("操作说明"))
+            .style(Style::default().fg(Color::Gray));
 
-    // 创建说明栏组件
-    let help_paragraph = Paragraph::new(help_text)
-        .block(Block::default().borders(Borders::ALL).title("操作说明"))
-        .style(Style::default().fg(Color::Gray));
+        // 渲染说明栏
+        f.render_widget(help_paragraph, chunks[1]);
+    }
 
-    // 渲染说明栏
-    f.render_widget(help_paragraph, chunks[1]);
 }
 
 // 生成帮助文本
@@ -239,7 +261,11 @@ fn get_help_text(app: &App) -> Vec<Line> {
                 Span::styled("↑/↓/j/k", Style::default().fg(Color::Yellow)),
                 Span::raw(" - 上下导航  "),
                 Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 查看项目详情"),
+                Span::raw(" - 查看项目详情  "),
+                Span::styled("a", Style::default().fg(Color::Yellow)),
+                Span::raw(" - 添加项目  "),
+                Span::styled("d", Style::default().fg(Color::Yellow)),
+                Span::raw(" - 删除项目"),
             ]),
         ]
     } else {
@@ -250,7 +276,8 @@ fn get_help_text(app: &App) -> Vec<Line> {
                 Span::styled("↑/↓/j/k", Style::default().fg(Color::Yellow)),
                 Span::raw(" - 上下导航  "),
                 Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 选择项目"),
+                Span::raw(" - 选择组  "),
+                Span::styled("r", Style::default().fg(Color::Yellow)),
                 Span::raw(" - 刷新列表  "),
                 Span::styled("t", Style::default().fg(Color::Yellow)),
                 Span::raw(" - "),
@@ -261,11 +288,9 @@ fn get_help_text(app: &App) -> Vec<Line> {
             ]),
             Line::from(vec![
                 Span::styled("a", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 添加订阅  "),
+                Span::raw(" - 添加订阅组  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 删除订阅  "),
-                Span::styled("r", Style::default().fg(Color::Yellow)),
-                Span::raw(" - 刷新列表"),
+                Span::raw(" - 删除订阅组"),
             ]),
         ]
     }

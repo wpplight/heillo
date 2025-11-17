@@ -1,4 +1,6 @@
-use ratatui::widgets::ListState;
+// 重新导出模型类型（延迟导入，在 main.rs 中 models 模块已声明）
+#[allow(unused_imports)]
+pub use crate::models::{Group, Item};
 
 /// 表示详情项目的结构体
 #[derive(Clone)]
@@ -6,6 +8,10 @@ pub struct DetailItem {
     pub title: String,
     pub describe: String,
     pub text: String,
+    /// Item ID，用于 API 更新
+    pub id: String,
+    /// Group ID，用于 API 更新
+    pub group_id: String,
 }
 
 /// 详情页面中的可选项枚举
