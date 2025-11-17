@@ -54,12 +54,10 @@ pub enum AppState {
     SaveMode,      // 保存选择模式
 }
 
-/// 组创建模式枚举
+/// 组创建输入字段选择
 #[derive(Clone, Copy, PartialEq)]
-pub enum GroupCreationMode {
-    Local,         // 本地模式
-    Remote,         // 远程模式
-    InputHost,      // 输入主机地址
-    InputPort,      // 输入端口
-    InputSecretKey, // 输入密钥
+pub enum GroupCreationField {
+    Host,      // 输入主机地址
+    Port,      // 输入端口
+    SecretKey, // 输入密钥
 }

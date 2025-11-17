@@ -2,7 +2,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use std::io;
 use std::thread;
 use std::time::Duration;
-use crate::types::{DetailItem, DetailSelection, Group, GroupCreationMode};
+use crate::types::{DetailItem, DetailSelection, Group, GroupCreationField};
 use crate::ui;
 use crate::utils;
 use crate::api::ApiClient;
@@ -30,7 +30,7 @@ pub struct App {
     pub current_group_id: Option<String>,
     pub error_message: Option<String>,
     pub in_group_creation: bool,
-    pub group_creation_mode: GroupCreationMode,
+    pub group_creation_field: GroupCreationField,  // 当前选中的输入字段
     pub group_creation_host: String,
     pub group_creation_port: String,
     pub group_creation_secret_key: String,
@@ -66,7 +66,7 @@ impl App {
             current_group_id: None,
             error_message: None,
             in_group_creation: false,
-            group_creation_mode: GroupCreationMode::Local,
+            group_creation_field: GroupCreationField::Host,
             group_creation_host: String::new(),
             group_creation_port: String::new(),
             group_creation_secret_key: String::new(),
@@ -333,7 +333,7 @@ impl App {
     /// 开始创建新组流程
     fn create_group(&mut self) {
         self.in_group_creation = true;
-        self.group_creation_mode = GroupCreationMode::Local;
+        self.group_creation_field = GroupCreationField::Host;
         self.group_creation_host.clear();
         self.group_creation_port.clear();
         self.group_creation_secret_key.clear();
@@ -352,20 +352,12 @@ impl App {
         
         let name = "新订阅组";
         
-        // 检查远程信息是否完整
+        // 检查远程信息是否完整（host 和 port 必须都有，secret_key 可选）
         let has_remote_info = !self.group_creation_host.is_empty() 
-            && !self.group_creation_port.is_empty() 
-            && !self.group_creation_secret_key.is_empty();
+            && !self.group_creation_port.is_empty();
         
-        // 决定创建本地组还是远程组
-        let should_create_remote = match self.group_creation_mode {
-            GroupCreationMode::Local => false,
-            GroupCreationMode::Remote => has_remote_info,
-            GroupCreationMode::InputHost | GroupCreationMode::InputPort | GroupCreationMode::InputSecretKey => {
-                // 如果正在输入远程信息，检查是否完整
-                has_remote_info
-            }
-        };
+        // 如果 host 和 port 都有，就创建远程组；否则创建本地组
+        let should_create_remote = has_remote_info;
         
         if should_create_remote {
             // 创建远程组
@@ -456,7 +448,7 @@ impl App {
         
         // 重置组创建状态
         self.in_group_creation = false;
-        self.group_creation_mode = GroupCreationMode::Local;
+        self.group_creation_field = GroupCreationField::Host;
         self.group_creation_host.clear();
         self.group_creation_port.clear();
         self.group_creation_secret_key.clear();
@@ -694,6 +686,13 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.in_edit_mode {
                     self.edit_buffer.push('j');
+                } else if self.in_group_creation {
+                    // 在组创建页面中，切换输入字段
+                    match self.group_creation_field {
+                        GroupCreationField::Host => self.group_creation_field = GroupCreationField::Port,
+                        GroupCreationField::Port => self.group_creation_field = GroupCreationField::SecretKey,
+                        GroupCreationField::SecretKey => self.group_creation_field = GroupCreationField::Host,
+                    }
                 } else if self.in_detail_page {
                     match self.current_detail_selection {
                         DetailSelection::Title => self.current_detail_selection = DetailSelection::Describe,
@@ -709,6 +708,13 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.in_edit_mode {
                     self.edit_buffer.push('k');
+                } else if self.in_group_creation {
+                    // 在组创建页面中，切换输入字段
+                    match self.group_creation_field {
+                        GroupCreationField::Host => self.group_creation_field = GroupCreationField::SecretKey,
+                        GroupCreationField::Port => self.group_creation_field = GroupCreationField::Host,
+                        GroupCreationField::SecretKey => self.group_creation_field = GroupCreationField::Port,
+                    }
                 } else if self.in_detail_page {
                     match self.current_detail_selection {
                         DetailSelection::Title => self.current_detail_selection = DetailSelection::Text,
@@ -725,29 +731,8 @@ impl App {
                 if self.in_edit_mode {
                     self.edit_buffer.push('a');
                 } else if self.in_group_creation {
-                    // 在组创建流程中，处理模式选择
-                    match self.group_creation_mode {
-                        GroupCreationMode::Local => {
-                            // 选择本地模式，直接完成创建
-                            self.finish_group_creation();
-                        }
-                        GroupCreationMode::Remote => {
-                            // 选择远程模式，开始输入主机地址
-                            self.group_creation_mode = GroupCreationMode::InputHost;
-                        }
-                        GroupCreationMode::InputHost => {
-                            // 完成主机地址输入，开始输入端口
-                            self.group_creation_mode = GroupCreationMode::InputPort;
-                        }
-                        GroupCreationMode::InputPort => {
-                            // 完成端口输入，开始输入密钥
-                            self.group_creation_mode = GroupCreationMode::InputSecretKey;
-                        }
-                        GroupCreationMode::InputSecretKey => {
-                            // 完成所有输入，创建组
-                            self.finish_group_creation();
-                        }
-                    }
+                    // 在组创建页面中，按 'a' 直接创建组
+                    self.finish_group_creation();
                 } else if self.in_detail_view {
                     self.create_item();
                 } else {
@@ -796,41 +781,9 @@ impl App {
                 if self.in_edit_mode {
                     self.edit_buffer.push('\n');
                 } else if self.in_group_creation {
-                    // 在组创建页面中处理 Enter 键
-                    match self.group_creation_mode {
-                        GroupCreationMode::Local => {
-                            // Local 模式：直接创建本地组
-                            self.finish_group_creation();
-                        }
-                        GroupCreationMode::Remote => {
-                            // Remote 模式：检查是否输入了远程信息
-                            if self.group_creation_host.is_empty() 
-                                && self.group_creation_port.is_empty() 
-                                && self.group_creation_secret_key.is_empty() {
-                                // 没有输入任何远程信息，创建本地组
-                                self.finish_group_creation();
-                            } else {
-                                // 有部分输入，开始输入流程
-                                self.group_creation_mode = GroupCreationMode::InputHost;
-                            }
-                        }
-                        GroupCreationMode::InputHost => {
-                            // 完成主机地址输入，继续下一步
-                            if !self.group_creation_host.is_empty() {
-                                self.group_creation_mode = GroupCreationMode::InputPort;
-                            }
-                        }
-                        GroupCreationMode::InputPort => {
-                            // 完成端口输入，继续下一步
-                            if !self.group_creation_port.is_empty() {
-                                self.group_creation_mode = GroupCreationMode::InputSecretKey;
-                            }
-                        }
-                        GroupCreationMode::InputSecretKey => {
-                            // 完成所有输入，创建组
-                            self.finish_group_creation();
-                        }
-                    }
+                    // 在组创建页面中，按 Enter 直接创建组
+                    // 如果 host 和 port 都有，创建远程组；否则创建本地组
+                    self.finish_group_creation();
                 } else {
                     if !self.in_detail_view {
                         // 进入选中组的 items 列表
@@ -916,30 +869,16 @@ impl App {
             },
             KeyCode::Char(c) => {
                 if self.in_group_creation {
-                    // 在组创建流程中，处理文本输入
-                    match self.group_creation_mode {
-                        GroupCreationMode::InputHost => {
+                    // 在组创建流程中，根据当前选中的字段输入文本
+                    match self.group_creation_field {
+                        GroupCreationField::Host => {
                             self.group_creation_host.push(c);
                         }
-                        GroupCreationMode::InputPort => {
+                        GroupCreationField::Port => {
                             self.group_creation_port.push(c);
                         }
-                        GroupCreationMode::InputSecretKey => {
+                        GroupCreationField::SecretKey => {
                             self.group_creation_secret_key.push(c);
-                        }
-                        _ => {
-                            // 在其他模式下，处理模式切换
-                            match c {
-                                'l' => {
-                                    // 切换到本地模式
-                                    self.group_creation_mode = GroupCreationMode::Local;
-                                }
-                                'r' => {
-                                    // 切换到远程模式
-                                    self.group_creation_mode = GroupCreationMode::Remote;
-                                }
-                                _ => {}
-                            }
                         }
                     }
                 } else if self.in_edit_mode {
@@ -948,18 +887,17 @@ impl App {
             },
             KeyCode::Backspace => {
                 if self.in_group_creation {
-                    // 在组创建流程中，处理退格删除
-                    match self.group_creation_mode {
-                        GroupCreationMode::InputHost => {
+                    // 在组创建流程中，根据当前选中的字段删除字符
+                    match self.group_creation_field {
+                        GroupCreationField::Host => {
                             self.group_creation_host.pop();
                         }
-                        GroupCreationMode::InputPort => {
+                        GroupCreationField::Port => {
                             self.group_creation_port.pop();
                         }
-                        GroupCreationMode::InputSecretKey => {
+                        GroupCreationField::SecretKey => {
                             self.group_creation_secret_key.pop();
                         }
-                        _ => {}
                     }
                 } else if self.in_edit_mode {
                     self.edit_buffer.pop();
@@ -980,7 +918,7 @@ impl App {
                 if self.in_group_creation {
                     // 取消组创建流程
                     self.in_group_creation = false;
-                    self.group_creation_mode = GroupCreationMode::Local;
+                    self.group_creation_field = GroupCreationField::Host;
                     self.group_creation_host.clear();
                     self.group_creation_port.clear();
                     self.group_creation_secret_key.clear();
