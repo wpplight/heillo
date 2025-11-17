@@ -4,8 +4,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
     pub id: String,
-    /// 组名称（base64 编码的加密字符串）
+    /// 组名称（base64 编码的加密字符串，或本地组的明文）
     pub name: String,
+    /// 是否为本地组（不连接远程服务器）
+    #[serde(default)]
+    pub is_local: bool,
+    /// 远程 API 主机地址（仅远程组使用）
+    #[serde(default)]
+    pub api_host: Option<String>,
+    /// 远程 API 端口（仅远程组使用）
+    #[serde(default)]
+    pub api_port: Option<String>,
+    /// 远程 API 密钥（仅远程组使用，不序列化到 JSON）
+    #[serde(skip)]
+    pub api_secret_key: Option<String>,
 }
 
 /// Item 结构体，表示订阅项

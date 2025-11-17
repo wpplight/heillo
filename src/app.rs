@@ -2,7 +2,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use std::io;
 use std::thread;
 use std::time::Duration;
-use crate::types::{DetailItem, DetailSelection, Group};
+use crate::types::{DetailItem, DetailSelection, Group, GroupCreationMode};
 use crate::ui;
 use crate::utils;
 use crate::api::ApiClient;
@@ -24,7 +24,9 @@ pub struct App {
     pub in_edit_mode: bool,
     pub in_save_mode: bool,
     pub edit_buffer: String,
-    pub api_client: Option<ApiClient>,  // 改为可选，支持本地模式
+    pub api_client: Option<ApiClient>,  // 全局 API 客户端（可选）
+    /// 组 ID 到 API 客户端的映射（每个远程组有自己的客户端）
+    pub group_api_clients: std::collections::HashMap<String, ApiClient>,
     pub current_group_id: Option<String>,
     pub error_message: Option<String>,
     pub in_group_creation: bool,
@@ -60,6 +62,7 @@ impl App {
             in_save_mode: false,
             edit_buffer: String::new(),
             api_client,
+            group_api_clients: std::collections::HashMap::new(),
             current_group_id: None,
             error_message: None,
             in_group_creation: false,
@@ -79,35 +82,67 @@ impl App {
 
     /// 加载所有 groups（本地或远程）
     pub fn load_groups(&mut self) -> Result<()> {
-        match &self.api_client {
-            Some(api_client) => {
-                // 远程模式：从API加载
-                match api_client.list_groups() {
-                    Ok(groups) => {
-                        self.groups = groups;
-                        self.error_message = None;
-                        // 更新选中状态
-                        if !self.groups.is_empty() {
-                            self.state.select(Some(0));
+        // 合并所有远程组的 groups 和本地组
+        let mut all_groups = Vec::new();
+        
+        // 保留本地组（is_local = true）
+        let local_groups: Vec<Group> = self.groups.iter()
+            .filter(|g| g.is_local)
+            .cloned()
+            .collect();
+        all_groups.extend(local_groups);
+        
+        // 从每个远程组的 API 客户端加载 groups
+        for (group_id, api_client) in &self.group_api_clients {
+            match api_client.list_groups() {
+                Ok(mut groups) => {
+                    // 为每个组添加 API 配置信息
+                    for group in &mut groups {
+                        // 查找本地是否已有该组的配置
+                        if let Some(local_group) = self.groups.iter().find(|g| g.id == group.id) {
+                            // 如果本地已有该组，保留配置信息
+                            group.is_local = false;
+                            group.api_host = local_group.api_host.clone();
+                            group.api_port = local_group.api_port.clone();
+                            group.api_secret_key = local_group.api_secret_key.clone();
                         } else {
-                            self.state.select(None);
+                            // 新组，从当前 group_id 对应的组获取配置
+                            if let Some(local_group) = self.groups.iter().find(|g| g.id == *group_id) {
+                                group.is_local = false;
+                                group.api_host = local_group.api_host.clone();
+                                group.api_port = local_group.api_port.clone();
+                                group.api_secret_key = local_group.api_secret_key.clone();
+                            }
                         }
-                        Ok(())
                     }
-                    Err(e) => {
-                        self.error_message = Some(format!("加载组失败: {}", e));
-                        Err(e)
-                    }
+                    all_groups.extend(groups);
+                }
+                Err(e) => {
+                    // 某个远程组加载失败，记录错误但继续
+                    self.error_message = Some(format!("加载组 {} 失败: {}", group_id, e));
                 }
             }
-            None => {
-                // 本地模式：清空groups列表
-                self.groups.clear();
-                self.error_message = None;
-                self.state.select(None);
-                Ok(())
-            }
         }
+        
+        // 如果只有本地组，保留它们
+        if self.group_api_clients.is_empty() && self.api_client.is_none() {
+            // 只保留本地组
+            all_groups = self.groups.iter()
+                .filter(|g| g.is_local)
+                .cloned()
+                .collect();
+        }
+        
+        self.groups = all_groups;
+        self.error_message = None;
+        
+        // 更新选中状态
+        if !self.groups.is_empty() {
+            self.state.select(Some(0));
+        } else {
+            self.state.select(None);
+        }
+        Ok(())
     }
 
     /// 加载当前组的 items（本地或远程）
@@ -120,57 +155,71 @@ impl App {
             }
         };
 
-        match &self.api_client {
-            Some(api_client) => {
-                // 远程模式：从API加载
-                match api_client.list_items(&group_id) {
-                    Ok(items) => {
-                        // 解密 items 并转换为 DetailItem
-                        self.detail_items = items
-                            .into_iter()
-                            .map(|item| {
-                                let title = api_client
-                                    .decrypt_item_field(&item.title)
-                                    .unwrap_or_else(|_| "解密失败".to_string());
-                                let describe = api_client
-                                    .decrypt_item_field(&item.describe)
-                                    .unwrap_or_else(|_| "解密失败".to_string());
-                                let text = api_client
-                                    .decrypt_item_field(&item.text)
-                                    .unwrap_or_else(|_| "解密失败".to_string());
-
-                                DetailItem {
-                                    title,
-                                    describe,
-                                    text,
-                                    id: item.id,
-                                    group_id: group_id.clone(),
-                                }
-                            })
-                            .collect();
-
-                        self.error_message = None;
-                        // 更新选中状态
-                        if !self.detail_items.is_empty() {
-                            self.detail_state.select(Some(0));
-                        } else {
-                            self.detail_state.select(None);
-                        }
-                        Ok(())
-                    }
-                    Err(e) => {
-                        self.error_message = Some(format!("加载 items 失败: {}", e));
-                        Err(e)
-                    }
-                }
-            }
-            None => {
-                // 本地模式：清空items列表
+        // 查找当前组
+        let current_group = self.groups.iter().find(|g| g.id == group_id);
+        
+        if let Some(group) = current_group {
+            if group.is_local {
+                // 本地组：清空items列表
                 self.detail_items.clear();
                 self.error_message = None;
                 self.detail_state.select(None);
                 Ok(())
+            } else {
+                // 远程组：使用该组的 API 客户端
+                if let Some(api_client) = self.group_api_clients.get(&group_id) {
+                    match api_client.list_items(&group_id) {
+                        Ok(items) => {
+                            // 解密 items 并转换为 DetailItem
+                            self.detail_items = items
+                                .into_iter()
+                                .map(|item| {
+                                    let title = api_client
+                                        .decrypt_item_field(&item.title)
+                                        .unwrap_or_else(|_| "解密失败".to_string());
+                                    let describe = api_client
+                                        .decrypt_item_field(&item.describe)
+                                        .unwrap_or_else(|_| "解密失败".to_string());
+                                    let text = api_client
+                                        .decrypt_item_field(&item.text)
+                                        .unwrap_or_else(|_| "解密失败".to_string());
+
+                                    DetailItem {
+                                        title,
+                                        describe,
+                                        text,
+                                        id: item.id,
+                                        group_id: group_id.clone(),
+                                    }
+                                })
+                                .collect();
+
+                            self.error_message = None;
+                            // 更新选中状态
+                            if !self.detail_items.is_empty() {
+                                self.detail_state.select(Some(0));
+                            } else {
+                                self.detail_state.select(None);
+                            }
+                            Ok(())
+                        }
+                        Err(e) => {
+                            self.error_message = Some(format!("加载 items 失败: {}", e));
+                            Err(e)
+                        }
+                    }
+                } else {
+                    // 没有找到该组的 API 客户端
+                    self.error_message = Some("找不到该组的 API 客户端".to_string());
+                    self.detail_items.clear();
+                    Ok(())
+                }
             }
+        } else {
+            // 找不到该组
+            self.error_message = Some("找不到该组".to_string());
+            self.detail_items.clear();
+            Ok(())
         }
     }
 
@@ -293,7 +342,7 @@ impl App {
     
     /// 完成组创建
     fn finish_group_creation(&mut self) {
-        // 简单实现：使用时间戳作为 ID
+        // 使用时间戳作为 ID
         use std::time::{SystemTime, UNIX_EPOCH};
         let id = format!("group_{}", 
             SystemTime::now()
@@ -302,55 +351,107 @@ impl App {
                 .as_secs());
         
         let name = "新订阅组";
-        // 默认不使用加密，后续可以添加用户选择界面
-        let use_encryption = false;
         
-        match self.group_creation_mode {
-            GroupCreationMode::Local => {
-                // 本地模式：直接在本地创建组
-                let new_group = Group {
-                    id: id.clone(),
-                    name: name.to_string(),
-                };
-                self.groups.push(new_group);
-                
-                // 更新选中状态
-                if !self.groups.is_empty() {
-                    self.state.select(Some(self.groups.len() - 1));
-                }
-                self.error_message = None;
+        // 检查远程信息是否完整
+        let has_remote_info = !self.group_creation_host.is_empty() 
+            && !self.group_creation_port.is_empty() 
+            && !self.group_creation_secret_key.is_empty();
+        
+        // 决定创建本地组还是远程组
+        let should_create_remote = match self.group_creation_mode {
+            GroupCreationMode::Local => false,
+            GroupCreationMode::Remote => has_remote_info,
+            GroupCreationMode::InputHost | GroupCreationMode::InputPort | GroupCreationMode::InputSecretKey => {
+                // 如果正在输入远程信息，检查是否完整
+                has_remote_info
             }
-            GroupCreationMode::Remote => {
-                // 远程模式：通过API创建组
-                if let Some(api_client) = &self.api_client {
-                    match api_client.create_group(&id, name, use_encryption) {
+        };
+        
+        if should_create_remote {
+            // 创建远程组
+            // 构建 API URL
+            let api_url = format!("http://{}:{}", 
+                self.group_creation_host.trim(),
+                self.group_creation_port.trim());
+            
+            // 创建该组的 API 客户端
+            match ApiClient::new(api_url.clone(), Some(self.group_creation_secret_key.clone())) {
+                Ok(api_client) => {
+                    // 使用该 API 客户端创建组（使用加密）
+                    match api_client.create_group(&id, name, true) {
                         Ok(_) => {
-                            let _ = self.load_groups();
+                            // 创建成功，保存组和 API 客户端
+                            let new_group = Group {
+                                id: id.clone(),
+                                name: name.to_string(), // 这里应该是加密后的，但创建时服务器会返回
+                                is_local: false,
+                                api_host: Some(self.group_creation_host.clone()),
+                                api_port: Some(self.group_creation_port.clone()),
+                                api_secret_key: Some(self.group_creation_secret_key.clone()),
+                            };
+                            
+                            // 保存 API 客户端
+                            self.group_api_clients.insert(id.clone(), api_client);
+                            
+                            // 重新加载 groups（从服务器获取，包含加密后的名称）
+                            if let Some(client) = self.group_api_clients.get(&id) {
+                                match client.list_groups() {
+                                    Ok(groups) => {
+                                        // 找到刚创建的组并更新
+                                        if let Some(created_group) = groups.iter().find(|g| g.id == id) {
+                                            self.groups.push(Group {
+                                                id: created_group.id.clone(),
+                                                name: created_group.name.clone(),
+                                                is_local: false,
+                                                api_host: Some(self.group_creation_host.clone()),
+                                                api_port: Some(self.group_creation_port.clone()),
+                                                api_secret_key: Some(self.group_creation_secret_key.clone()),
+                                            });
+                                        } else {
+                                            self.groups.push(new_group);
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // 如果加载失败，使用本地创建的组
+                                        self.groups.push(new_group);
+                                    }
+                                }
+                            } else {
+                                self.groups.push(new_group);
+                            }
+                            
+                            // 更新选中状态
+                            if !self.groups.is_empty() {
+                                self.state.select(Some(self.groups.len() - 1));
+                            }
                             self.error_message = None;
                         }
                         Err(e) => {
-                            self.error_message = Some(format!("创建组失败: {}", e));
+                            self.error_message = Some(format!("创建远程组失败: {}", e));
                         }
                     }
-                } else {
-                    // 如果没有API客户端，创建本地组
-                    let new_group = Group {
-                        id: id.clone(),
-                        name: name.to_string(),
-                    };
-                    self.groups.push(new_group);
-                    
-                    // 更新选中状态
-                    if !self.groups.is_empty() {
-                        self.state.select(Some(self.groups.len() - 1));
-                    }
-                    self.error_message = None;
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("创建 API 客户端失败: {}", e));
                 }
             }
-            _ => {
-                // 其他模式不应该到达这里
-                self.error_message = Some("组创建模式错误".to_string());
+        } else {
+            // 创建本地组
+            let new_group = Group {
+                id: id.clone(),
+                name: name.to_string(),
+                is_local: true,
+                api_host: None,
+                api_port: None,
+                api_secret_key: None,
+            };
+            self.groups.push(new_group);
+            
+            // 更新选中状态
+            if !self.groups.is_empty() {
+                self.state.select(Some(self.groups.len() - 1));
             }
+            self.error_message = None;
         }
         
         // 重置组创建状态
@@ -694,6 +795,42 @@ impl App {
             KeyCode::Enter => {
                 if self.in_edit_mode {
                     self.edit_buffer.push('\n');
+                } else if self.in_group_creation {
+                    // 在组创建页面中处理 Enter 键
+                    match self.group_creation_mode {
+                        GroupCreationMode::Local => {
+                            // Local 模式：直接创建本地组
+                            self.finish_group_creation();
+                        }
+                        GroupCreationMode::Remote => {
+                            // Remote 模式：检查是否输入了远程信息
+                            if self.group_creation_host.is_empty() 
+                                && self.group_creation_port.is_empty() 
+                                && self.group_creation_secret_key.is_empty() {
+                                // 没有输入任何远程信息，创建本地组
+                                self.finish_group_creation();
+                            } else {
+                                // 有部分输入，开始输入流程
+                                self.group_creation_mode = GroupCreationMode::InputHost;
+                            }
+                        }
+                        GroupCreationMode::InputHost => {
+                            // 完成主机地址输入，继续下一步
+                            if !self.group_creation_host.is_empty() {
+                                self.group_creation_mode = GroupCreationMode::InputPort;
+                            }
+                        }
+                        GroupCreationMode::InputPort => {
+                            // 完成端口输入，继续下一步
+                            if !self.group_creation_port.is_empty() {
+                                self.group_creation_mode = GroupCreationMode::InputSecretKey;
+                            }
+                        }
+                        GroupCreationMode::InputSecretKey => {
+                            // 完成所有输入，创建组
+                            self.finish_group_creation();
+                        }
+                    }
                 } else {
                     if !self.in_detail_view {
                         // 进入选中组的 items 列表
@@ -754,14 +891,13 @@ impl App {
                 }
             }
             KeyCode::Char('w') => {
-                if self.in_save_mode {
+                if self.in_edit_mode {
+                    // 在编辑模式下，'w' 应该作为普通字符输入
+                    self.edit_buffer.push('w');
+                } else if self.in_save_mode {
+                    // 在保存模式下，'w' 保存并退出
                     self.save_item_edit();
                     self.in_save_mode = false;
-                    self.in_edit_mode = false;
-                    self.edit_buffer.clear();
-                } else if self.in_edit_mode {
-                    // 在编辑模式下，w 键直接保存并退出
-                    self.save_item_edit();
                     self.in_edit_mode = false;
                     self.edit_buffer.clear();
                 } else if self.in_detail_page {

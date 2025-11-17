@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::types::DetailSelection;
+use crate::types::{DetailSelection, GroupCreationMode};
 use crate::app::App;
 
 // UI渲染函数
@@ -210,14 +210,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .groups
             .iter()
             .map(|group| {
-                let name = match &app.api_client {
-                    Some(api_client) => {
+                let name = if group.is_local {
+                    // 本地组：直接显示组名称
+                    group.name.clone()
+                } else {
+                    // 远程组：使用该组的 API 客户端解密
+                    if let Some(api_client) = app.group_api_clients.get(&group.id) {
                         api_client
                             .decrypt_group_name(&group.name)
                             .unwrap_or_else(|_| "解密失败".to_string())
-                    }
-                    None => {
-                        // 本地模式：直接显示组名称
+                    } else {
+                        // 如果没有找到 API 客户端，显示原始名称
                         group.name.clone()
                     }
                 };
